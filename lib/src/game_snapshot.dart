@@ -21,6 +21,9 @@ class GameSnapshot {
     required this.lastPlayLabel,
     required this.pendingText,
     required this.winnerPlayerId,
+    this.turnRemainingSeconds,
+    this.turnNotice,
+    this.disconnectedPlayerIds = const {},
     this.targetWins = 0,
     this.winsByPlayerId = const {},
   });
@@ -30,6 +33,9 @@ class GameSnapshot {
     String viewerPlayerId, {
     int targetWins = 0,
     Map<String, int> winsByPlayerId = const {},
+    int? turnRemainingSeconds,
+    String? turnNotice,
+    Set<String> disconnectedPlayerIds = const {},
   }) {
     final lastPlay = state.lastPlay;
     return GameSnapshot(
@@ -56,6 +62,9 @@ class GameSnapshot {
       lastPlayLabel: lastPlay == null ? null : comboLabel(lastPlay.combo),
       pendingText: _pendingText(state),
       winnerPlayerId: state.winnerPlayerId,
+      turnRemainingSeconds: turnRemainingSeconds,
+      turnNotice: turnNotice,
+      disconnectedPlayerIds: disconnectedPlayerIds,
       targetWins: targetWins,
       winsByPlayerId: winsByPlayerId,
     );
@@ -81,6 +90,13 @@ class GameSnapshot {
       lastPlayLabel: json['lastPlayLabel'] as String?,
       pendingText: json['pendingText'] as String?,
       winnerPlayerId: json['winnerPlayerId'] as String?,
+      turnRemainingSeconds: json['turnRemainingSeconds'] as int?,
+      turnNotice: json['turnNotice'] as String?,
+      disconnectedPlayerIds: {
+        for (final id
+            in ((json['disconnectedPlayerIds'] as List<Object?>?) ?? const []))
+          id! as String,
+      },
       targetWins: (json['targetWins'] as int?) ?? 0,
       winsByPlayerId: {
         for (final entry
@@ -104,6 +120,9 @@ class GameSnapshot {
   final String? lastPlayLabel;
   final String? pendingText;
   final String? winnerPlayerId;
+  final int? turnRemainingSeconds;
+  final String? turnNotice;
+  final Set<String> disconnectedPlayerIds;
 
   /// Jumlah ronde menang yang dibutuhkan untuk memenangkan match (0 = tak dibatasi).
   final int targetWins;
@@ -132,6 +151,9 @@ class GameSnapshot {
       'lastPlayLabel': lastPlayLabel,
       'pendingText': pendingText,
       'winnerPlayerId': winnerPlayerId,
+      'turnRemainingSeconds': turnRemainingSeconds,
+      'turnNotice': turnNotice,
+      'disconnectedPlayerIds': disconnectedPlayerIds.toList(),
       'targetWins': targetWins,
       'winsByPlayerId': winsByPlayerId,
     };

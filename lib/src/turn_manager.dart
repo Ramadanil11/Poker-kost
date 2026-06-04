@@ -433,6 +433,34 @@ class TurnManager {
     );
   }
 
+  /// Skip paksa untuk timeout/koneksi putus.
+  ///
+  /// Saat opening, skip tetap membuang semua kartu 3 milik pemain tersebut.
+  /// Saat playing dan ada play di meja, skip diperlakukan seperti pass biasa.
+  /// Jika pemain sedang lead dan meja kosong, giliran langsung dilempar ke
+  /// pemain berikutnya karena pass normal memang tidak legal untuk leader.
+  void skipTurn(String playerId) {
+    if (_state.activePlayer.id != playerId) {
+      throw StateError('It is not $playerId turn.');
+    }
+
+    if (_state.status == GameStatus.opening) {
+      submitOpeningThrees(playerId);
+      return;
+    }
+
+    _ensurePlaying();
+    if (_state.lastPlay != null) {
+      pass(playerId);
+      return;
+    }
+
+    _state = _state.copyWith(
+      activePlayerIndex: _nextPlayerIndex(_state.activePlayerIndex),
+      passCount: 0,
+    );
+  }
+
   /// Snapshot kartu yang sedang dipamerkan oleh semua pemain.
   Map<String, List<GameCard>> publicShownCards() {
     return {for (final player in _state.players) player.id: player.shownCards};
@@ -479,8 +507,8 @@ class TurnManager {
     PendingInstantWin? pending,
   ) {
     if (playerAfterPlay.hand.isNotEmpty) return false;
-    if (play.combo.isJokerSet) return false;
     if (pending != null) return false;
+    if (play.combo.isJokerSet && _activePlayerCount() > 2) return false;
     return true;
   }
 

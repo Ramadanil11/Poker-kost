@@ -1687,6 +1687,10 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
   late TurnManager _manager;
   final Set<String> _selectedCardIds = {};
   final Map<String, int> _scores = {};
+  Timer? _turnTimer;
+  DateTime? _turnDeadline;
+  String? _turnKey;
+  String? _turnNotice;
 
   @override
   void initState() {
@@ -1697,6 +1701,7 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
 
   @override
   void dispose() {
+    _turnTimer?.cancel();
     _GameAudio.stopBacksound();
     super.dispose();
   }
@@ -1716,6 +1721,8 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
       randomizeTurnOrder: true,
       ballCount: widget.ballCount,
     );
+    _turnKey = null;
+    _turnNotice = null;
   }
 
   void _startNextRoundFromWinner(String winnerId) {
@@ -1727,11 +1734,14 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
       startingPlayerId: winnerId,
       ballCount: widget.ballCount,
     );
+    _turnKey = null;
+    _turnNotice = null;
   }
 
   @override
   Widget build(BuildContext context) {
     final state = _manager.state;
+    _syncLocalTurnTimer();
     final winsByPlayerId = {
       for (final player in state.players) player.id: _scores[player.name] ?? 0,
     };
@@ -1740,6 +1750,8 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
       state.activePlayer.id,
       targetWins: widget.targetWins,
       winsByPlayerId: winsByPlayerId,
+      turnRemainingSeconds: _localTurnRemainingSeconds,
+      turnNotice: _turnNotice,
     );
 
     return Scaffold(
@@ -1799,9 +1811,76 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
       if (shouldDrop) _GameAudio.playEffect('drop');
       if (playedBomb) _GameAudio.playEffect('bomb');
       _resetRoundIfWinner();
+      _syncLocalTurnTimer();
     } on Object catch (error) {
       _showMessage(_shortError(error));
     }
+  }
+
+  void _syncLocalTurnTimer() {
+    if (_manager.state.status == GameStatus.finished ||
+        _manager.state.winnerPlayerId != null) {
+      _turnTimer?.cancel();
+      _turnTimer = null;
+      _turnDeadline = null;
+      _turnKey = null;
+      return;
+    }
+
+    final previousKey = _turnKey;
+    final key = _localTurnKey;
+    if (_turnKey == key && _turnTimer != null) return;
+
+    _turnTimer?.cancel();
+    _turnKey = key;
+    _turnDeadline = DateTime.now().add(turnTimeout);
+    _turnNotice = '${_manager.state.activePlayer.name} jalan.';
+    if (previousKey != null) {
+      scheduleMicrotask(() {
+        if (mounted) _showMessage(_turnNotice!);
+      });
+    }
+    _turnTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final remaining = _localTurnRemainingSeconds ?? 0;
+      if (remaining <= 0) {
+        final skippedName = _manager.state.activePlayer.name;
+        setState(() {
+          _manager.skipTurn(_manager.state.activePlayer.id);
+          _selectedCardIds.clear();
+          _turnNotice = '$skippedName tidak jalan 20 detik, giliran diskip.';
+          _turnKey = null;
+        });
+        _GameAudio.playEffect('drop');
+        _resetRoundIfWinner();
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  int? get _localTurnRemainingSeconds {
+    final deadline = _turnDeadline;
+    if (deadline == null) return null;
+    final remaining = deadline.difference(DateTime.now()).inSeconds + 1;
+    return remaining.clamp(0, turnTimeout.inSeconds).toInt();
+  }
+
+  String get _localTurnKey {
+    final state = _manager.state;
+    return [
+      state.roundNumber,
+      state.status.name,
+      state.activePlayer.id,
+      state.history.length,
+      state.passCount,
+      state.openingSubmittedPlayerIds.length,
+      state.lastPlay?.playerId ?? '',
+      state.lastPlay?.turnNumber ?? -1,
+    ].join('|');
   }
 
   void _resetRoundIfWinner() {
@@ -1828,9 +1907,7 @@ class _LocalGameScreenState extends State<LocalGameScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    _showGameNotification(context, message);
   }
 }
 
@@ -1875,10 +1952,12 @@ class _LanHostScreenState extends State<LanHostScreen> {
     await _service.start();
     _snapshotSubscription = _service.snapshots.listen((snapshot) {
       if (!mounted) return;
+      final turnMessage = _turnNotificationMessage(_snapshot, snapshot);
       _playSnapshotAudio(_snapshot, snapshot);
       setState(() {
         _snapshot = snapshot;
       });
+      if (turnMessage != null) _showMessage(turnMessage);
     });
     setState(() {
       _snapshot = _service.hostSnapshot;
@@ -1945,9 +2024,7 @@ class _LanHostScreenState extends State<LanHostScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    _showGameNotification(context, message);
   }
 }
 
@@ -2038,10 +2115,12 @@ class _LanClientScreenState extends State<LanClientScreen> {
   Future<void> _connect() async {
     _snapshotSubscription = _service.snapshots.listen((snapshot) {
       if (!mounted) return;
+      final turnMessage = _turnNotificationMessage(_snapshot, snapshot);
       _playSnapshotAudio(_snapshot, snapshot);
       setState(() {
         _snapshot = snapshot;
       });
+      if (turnMessage != null) _showMessage(turnMessage);
     });
     _errorSubscription = _service.errors.listen(_showMessage);
     try {
@@ -2102,9 +2181,7 @@ class _LanClientScreenState extends State<LanClientScreen> {
 
   void _showMessage(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    _showGameNotification(context, message);
   }
 }
 
@@ -2616,6 +2693,62 @@ void _playSnapshotAudio(GameSnapshot? previous, GameSnapshot next) {
   }
 }
 
+String? _turnNotificationMessage(GameSnapshot? previous, GameSnapshot next) {
+  if (previous == null) return null;
+
+  if (previous.turnNotice != next.turnNotice &&
+      next.turnNotice != null &&
+      !next.turnNotice!.endsWith(' jalan.')) {
+    return next.turnNotice;
+  }
+
+  if (previous.activePlayerId != next.activePlayerId &&
+      (next.status == GameStatus.playing ||
+          next.status == GameStatus.opening)) {
+    return '${next.activePlayer.name} jalan.';
+  }
+
+  return null;
+}
+
+void _showGameNotification(BuildContext context, String message) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.notifications_active,
+                size: 18, color: Color(0xFFFFD45A)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xEE07121A),
+        duration: const Duration(milliseconds: 1700),
+        margin: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(
+            color: const Color(0xFFFFD45A).withValues(alpha: 0.45),
+          ),
+        ),
+      ),
+    );
+}
+
 class _RoundIconButton extends StatelessWidget {
   const _RoundIconButton({
     required this.icon,
@@ -3067,6 +3200,12 @@ class _RoundTable extends StatelessWidget {
                     player: opponents[i],
                     isActive: opponents[i].id == snapshot.activePlayerId,
                     isViewer: false,
+                    isDisconnected: snapshot.disconnectedPlayerIds
+                        .contains(opponents[i].id),
+                    turnRemainingSeconds:
+                        opponents[i].id == snapshot.activePlayerId
+                            ? snapshot.turnRemainingSeconds
+                            : null,
                     displayHandCount: dealCounts?[opponents[i].id],
                     openingCardsVisible: snapshot.status != GameStatus.opening,
                     alignRight: seatPositions[i].dx > 0.5,
@@ -3600,12 +3739,68 @@ Offset _openingCardsOffsetFor(GameSnapshot snapshot, String playerId) {
   return Offset(seat.dx, 0.62);
 }
 
+class _PlayerTurnTimer extends StatelessWidget {
+  const _PlayerTurnTimer({required this.seconds});
+
+  final int seconds;
+
+  @override
+  Widget build(BuildContext context) {
+    final urgent = seconds <= 5;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: urgent
+              ? const [Color(0xFFE11D48), Color(0xFF7F1D1D)]
+              : const [Color(0xFFFFD45A), Color(0xFFC57C1D)],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0x66000000)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x88000000),
+            offset: Offset(0, 2),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      child: SizedBox(
+        width: 58,
+        height: 24,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.timer,
+              size: 14,
+              color: urgent ? Colors.white : const Color(0xFF231307),
+            ),
+            const SizedBox(width: 3),
+            Text(
+              '${seconds}s',
+              style: TextStyle(
+                color: urgent ? Colors.white : const Color(0xFF231307),
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SeatBadge extends StatelessWidget {
   const _SeatBadge({
     required this.player,
     required this.isActive,
     required this.isViewer,
+    required this.isDisconnected,
     required this.openingCardsVisible,
+    this.turnRemainingSeconds,
     this.displayHandCount,
     this.alignRight = false,
   });
@@ -3613,7 +3808,9 @@ class _SeatBadge extends StatelessWidget {
   final PlayerSnapshot player;
   final bool isActive;
   final bool isViewer;
+  final bool isDisconnected;
   final bool openingCardsVisible;
+  final int? turnRemainingSeconds;
   final int? displayHandCount;
   final bool alignRight;
 
@@ -3636,13 +3833,17 @@ class _SeatBadge extends StatelessWidget {
         children: [
           Row(
             children: [
-              if (alignRight && isActive)
+              if (alignRight && turnRemainingSeconds != null) ...[
+                _PlayerTurnTimer(seconds: turnRemainingSeconds!),
+                const SizedBox(width: 4),
+              ] else if (alignRight && isActive) ...[
                 const Icon(
                   Icons.arrow_circle_down,
                   size: 15,
                   color: Color(0xFFF0B43D),
                 ),
-              if (alignRight && isActive) const SizedBox(width: 4),
+                const SizedBox(width: 4),
+              ],
               Expanded(
                 child: Text(
                   isViewer ? '${player.name} (Kamu)' : player.name,
@@ -3663,7 +3864,10 @@ class _SeatBadge extends StatelessWidget {
                   ),
                 ),
               ),
-              if (!alignRight && isActive)
+              if (!alignRight && turnRemainingSeconds != null) ...[
+                const SizedBox(width: 4),
+                _PlayerTurnTimer(seconds: turnRemainingSeconds!),
+              ] else if (!alignRight && isActive)
                 const Icon(
                   Icons.arrow_circle_down,
                   size: 15,
@@ -3696,6 +3900,17 @@ class _SeatBadge extends StatelessWidget {
               ),
             ],
           ),
+          if (isDisconnected) ...[
+            const SizedBox(height: 2),
+            const Text(
+              'OFFLINE',
+              style: TextStyle(
+                color: Color(0xFFFFB4B4),
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
           if (tableCards.isNotEmpty) ...[
             const SizedBox(height: 3),
             SizedBox(
@@ -3826,6 +4041,9 @@ class _HandPanel extends StatelessWidget {
     final viewerOpeningCards = snapshot.status == GameStatus.opening
         ? const <GameCard>[]
         : snapshot.viewer.openingCards;
+    final viewerTurnSeconds = snapshot.activePlayerId == snapshot.viewerPlayerId
+        ? snapshot.turnRemainingSeconds
+        : null;
     final shownCardIds =
         snapshot.viewer.shownCards.map((card) => card.id).toSet();
     final selectedShown = selectedCardIds.isNotEmpty &&
@@ -3864,9 +4082,15 @@ class _HandPanel extends StatelessWidget {
         return Stack(
           clipBehavior: Clip.none,
           children: [
-            if (viewerOpeningCards.isNotEmpty)
+            if (viewerTurnSeconds != null)
               Positioned(
                 left: actionRailWidth,
+                top: 0,
+                child: _PlayerTurnTimer(seconds: viewerTurnSeconds),
+              ),
+            if (viewerOpeningCards.isNotEmpty)
+              Positioned(
+                left: actionRailWidth + (viewerTurnSeconds == null ? 0 : 74),
                 top: 0,
                 width: 180,
                 height: 42,
