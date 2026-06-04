@@ -5,6 +5,7 @@
 *.swp
 .DS_Store
 desktop.ini
+contoh/
 .atom/
 .build/
 .buildlog/
