@@ -2968,13 +2968,19 @@ class _RoundTable extends StatelessWidget {
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
         final seatWidth = (width * 0.15).clamp(88.0, 138.0).toDouble();
-        final seatHeight = (height * 0.18).clamp(64.0, 88.0).toDouble();
-        final tableSideInset = (width * 0.008).clamp(6.0, 12.0).toDouble();
-        final tableTop = (height * 0.075).clamp(28.0, 46.0).toDouble();
-        final tableBottom = (height * 0.11).clamp(66.0, 96.0).toDouble();
         final opponents = snapshot.players
             .where((player) => player.id != snapshot.viewerPlayerId)
             .toList();
+        final hasOpponentTableCards = opponents.any((player) =>
+            snapshot.status != GameStatus.opening &&
+                player.openingCards.isNotEmpty ||
+            player.shownCards.isNotEmpty);
+        final seatHeight = hasOpponentTableCards
+            ? (height * 0.22).clamp(96.0, 116.0).toDouble()
+            : (height * 0.18).clamp(64.0, 88.0).toDouble();
+        final tableSideInset = (width * 0.008).clamp(6.0, 12.0).toDouble();
+        final tableTop = (height * 0.075).clamp(28.0, 46.0).toDouble();
+        final tableBottom = (height * 0.11).clamp(66.0, 96.0).toDouble();
         final seatPositions = _seatPositionsFor(opponents.length);
         final waitingForPlayers =
             waitingConnectedCount != null && waitingExpectedCount != null;
